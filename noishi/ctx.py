@@ -4,6 +4,7 @@ from typing import Callable, Type, get_args, Union, Optional, overload, TypeAlia
 import inspect
 import functools
 import types
+from noishi.exception import SubModuleInjectError, SubModuleNoExistApplyError
 
 handler_type: TypeAlias = Union[Callable[..., Any], 'Context', Any]
 
@@ -180,8 +181,24 @@ class Context:
     def add_sub_module(self, module: types.ModuleType):
         "添加子模块。"
         func = getattr(module, "apply", None)
-        if isinstance(func, types.FunctionType):
-            return func(self)
-    
 
+        if isinstance(func, types.FunctionType):
+            inject_ok = self.check_sub_module_inject(module)
+            if not inject_ok:
+                raise SubModuleInjectError("子模块inject未满足。")
+            return func(self)
+        else:
+            raise SubModuleNoExistApplyError("子模块未实现apply。")
+        
+    def check_sub_module_inject(self, module: types.ModuleType) -> bool:
+        "检查子模块inject。"
+        inject = getattr(module, "inject", None)
+        if isinstance(inject, list):
+            if all(k in self._handler for k in inject):
+                return True
+        else: 
+            return True
+        
+        return False
+    
 __all__ = ['Event', 'Context']

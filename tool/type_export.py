@@ -10,10 +10,17 @@ class RegisterVisitor(ast.NodeVisitor):
         self.module_prefix = module_prefix
         self.registers: dict[str, dict[str, dict]] = {}
         self.functions: dict[str, Union[ast.FunctionDef, ast.AsyncFunctionDef]] = {}
+        self.classes: dict[str, ast.ClassDef] = {}
         self.var_ctx_map: dict[str, str] = {}
         self.imports: dict[str, str] = {}
         self.calls: list[tuple[str, Optional[str], list[str]]] = []
         self.local_contexts: set[str] = set()
+        self.inject_list: Optional[list[str]] = None
+
+    def visit_ClassDef(self, node: ast.ClassDef):
+        key = f"{self.module_prefix}.{node.name}"
+        self.classes[key] = node
+        self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef):
         self._register_function(node)
@@ -57,7 +64,6 @@ class RegisterVisitor(ast.NodeVisitor):
                 elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
                     func_base = func.value.id
                     func_attr = func.attr
-
                 if func_base:
                     arg_names = [a.id for a in node.args if isinstance(a, ast.Name)]
                     if arg_names:
@@ -92,6 +98,16 @@ class RegisterVisitor(ast.NodeVisitor):
             elif isinstance(value, ast.Call) and self._is_context_call(value):
                 self.var_ctx_map[target_name] = f"{self.module_prefix}.ctx"
                 self.local_contexts.add(f"{self.module_prefix}.ctx")
+        
+        if (len(node.targets) == 1 and 
+            isinstance(node.targets[0], ast.Name) and 
+            node.targets[0].id == 'inject' and
+            isinstance(node.value, ast.List)):
+            self.inject_list = []
+            for element in node.value.elts:
+                if isinstance(element, ast.Constant) and isinstance(element.value, str):
+                    self.inject_list.append(element.value)
+        
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom):
@@ -103,32 +119,29 @@ class RegisterVisitor(ast.NodeVisitor):
             else:
                 self.imports[name] = alias.name
 
-
     def visit_Import(self, node: ast.Import):
         for alias in node.names:
             name = alias.asname or alias.name
             self.imports[name] = alias.name
 
     def _is_register_call(self, node: ast.Call) -> bool:
-        return (isinstance(node.func, ast.Attribute) 
+        return (isinstance(node.func, ast.Attribute)
                 and node.func.attr == 'register')
 
     def _process_register_call(self, node: ast.Call):
         ctx_name = self._get_ctx_name(node.func.value)
         if not ctx_name:
             return
-
         reg_name = self._get_register_name(node)
         type_str = self._get_register_type(node)
         
         if not ctx_name.startswith(self.module_prefix + '.') and ctx_name != self.module_prefix:
             ctx_name = f"{self.module_prefix}.{ctx_name}"
-
         if ctx_name not in self.registers:
             self.registers[ctx_name] = {}
         
         self.registers[ctx_name][reg_name] = {
-            'type': type_str, 
+            'type': type_str,
             'node': node
         }
 
@@ -158,7 +171,7 @@ class RegisterVisitor(ast.NodeVisitor):
         return None
 
     def _is_context_call(self, node: ast.Call) -> bool:
-        return (isinstance(node.func, ast.Name) 
+        return (isinstance(node.func, ast.Name)
                 and node.func.id == 'Context')
 
     def _get_ctx_name(self, node) -> Optional[str]:
@@ -185,54 +198,137 @@ class RegisterVisitor(ast.NodeVisitor):
                     base = self._get_ctx_name(func.value)
                     return base, calls
                 break
-
         return None, calls
 
-
 class TypeGenerator:
-    def __init__(self, all_regs: dict, all_funcs: dict, ctx_path: str, ctx_import_path: str, local_contexts: set, all_mounts: dict):
+    def __init__(self, all_regs: dict, all_funcs: dict, all_classes: dict, ctx_path: str, ctx_import_path: str, local_contexts: set, all_mounts: dict, all_injects: dict):
         self.all_regs = all_regs
         self.all_funcs = all_funcs
+        self.all_classes = all_classes
         self.ctx_path = ctx_path
         self.ctx_import_path = ctx_import_path
         self.local_contexts = local_contexts
         self.all_mounts = all_mounts
+        self.all_injects = all_injects
         self.registered_fn_keys = self._collect_registered_function_keys()
+        self.dependency_classes = set()
 
     def _collect_registered_function_keys(self) -> set:
         keys = set()
         for ctx_name, regs in self.all_regs.items():
             for reg_name, info in regs.items():
                 typ = info.get('type')
-                if (typ and isinstance(typ, str) 
-                    and typ != 'ctx' and not typ.startswith('<')):
+                if (typ and isinstance(typ, str)
+                        and typ != 'ctx' and not typ.startswith('<')):
                     keys.add(typ)
         return keys
 
     def generate_module(self) -> ast.Module:
         module = ast.Module(body=[], type_ignores=[])
-
         module.body.extend(self._create_module_header())
+        module.body.extend(self._create_dependency_protocols())
         module.body.extend(self._create_extend_protocols())
-
+        module.body.extend(self._create_inject_protocols())
         ast.fix_missing_locations(module)
         return module
 
     def _pascalize(self, name: str) -> str:
+        if not name:
+            return ""
         parts = [p for p in re.split(r"[^0-9a-zA-Z]+", name) if p]
         if not parts:
             return name.capitalize()
         return ''.join(p.capitalize() for p in parts)
+    
+    def _path_to_protocol_name(self, path: str, prefix: str) -> str:
+        if not path:
+            return prefix
+        clean_path = re.sub(r'\.(py|ctx)$', '', path)
+        pascal_parts = [self._pascalize(p) for p in clean_path.split('.')]
+        return f"{prefix}_" + "_".join(pascal_parts)
+
+    def _get_class_protocol_name(self, class_key: str) -> str:
+        module_path, class_name = class_key.rsplit('.', 1)
+        return self._path_to_protocol_name(f"{module_path}.{class_name}", prefix="DepProtocol")
+    
+    def _get_context_protocol_name(self, ctx_path: str) -> str:
+        return self._path_to_protocol_name(ctx_path, prefix="ExtendContext")
+
+    def _collect_dependencies(self, node):
+        for child in ast.walk(node):
+            if isinstance(child, ast.Name) and child.id in [cls.split('.')[-1] for cls in self.all_classes]:
+                full_key = next((k for k in self.all_classes if k.endswith('.' + child.id)), None)
+                if full_key:
+                    self.dependency_classes.add(full_key)
+
+    def _create_protocol_method_from_function(self, stmt: Union[ast.FunctionDef, ast.AsyncFunctionDef]) -> Union[ast.FunctionDef, ast.AsyncFunctionDef]:
+        body = [ast.Expr(value=ast.Constant(value=Ellipsis))]
+        
+        if isinstance(stmt, ast.FunctionDef):
+            return ast.FunctionDef(
+                name=stmt.name,
+                args=stmt.args,
+                body=body,
+                decorator_list=stmt.decorator_list,
+                returns=stmt.returns
+            )
+        else:
+            return ast.AsyncFunctionDef(
+                name=stmt.name,
+                args=stmt.args,
+                body=body,
+                decorator_list=stmt.decorator_list,
+                returns=stmt.returns
+            )
+            
+    def _create_dependency_protocols(self) -> list:
+        protocols = []
+        
+        for ctx_path in self.all_regs:
+            for reg_name, info in self.all_regs[ctx_path].items():
+                typ = info.get('type')
+                if typ in self.registered_fn_keys and typ in self.all_funcs:
+                    fn_node = self.all_funcs[typ]
+                    if fn_node.returns:
+                        self._collect_dependencies(fn_node.returns)
+
+        created = set()
+        for class_key in sorted(self.dependency_classes):
+            class_node = self.all_classes[class_key]
+            proto_name = self._get_class_protocol_name(class_key)
+            
+            if proto_name in created:
+                continue
+            created.add(proto_name)
+            
+            proto_body = []
+            for stmt in class_node.body:
+                if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    proto_method = self._create_protocol_method_from_function(stmt)
+                    proto_body.append(proto_method)
+                elif isinstance(stmt, ast.AnnAssign):
+                    proto_body.append(stmt)
+            
+            if not proto_body:
+                proto_body = [ast.Expr(value=ast.Constant(value=Ellipsis))]
+                
+            protocols.append(ast.ClassDef(
+                name=proto_name,
+                bases=[ast.Name(id='Protocol', ctx=ast.Load())],
+                keywords=class_node.keywords,
+                body=proto_body,
+                decorator_list=[]
+            ))
+        return protocols
 
     def _create_extend_protocols(self) -> list:
         classes = []
         created = set()
         
         abstract_contexts = {path for paths in self.all_mounts.values() for path in paths}
-
         protocol_targets = set()
         protocol_targets.update(self.local_contexts)
-
+        
         for ctx_path, regs in self.all_regs.items():
             if not self._is_external_context(ctx_path):
                 protocol_targets.add(ctx_path)
@@ -241,24 +337,24 @@ class TypeGenerator:
                 if info.get('type') == 'ctx':
                     sub_ctx_path = f"{ctx_path}.{reg_name}"
                     protocol_targets.add(sub_ctx_path)
-
+                    
         for ctx_path in sorted(list(protocol_targets)):
             if ctx_path in abstract_contexts and ctx_path not in self.local_contexts:
                 continue
                 
-            proto_name = self._generate_protocol_name(ctx_path)
+            proto_name = self._get_context_protocol_name(ctx_path)
             if proto_name in created:
                 continue
             created.add(proto_name)
-
+            
             class_body = [ast.Expr(value=ast.Constant(value=f'Auto-generated Extend protocol for {ctx_path}'))]
-
+            
             if ctx_path in self.all_regs:
                 for reg_name, info in self.all_regs[ctx_path].items():
                     member = self._create_registered_member(reg_name, info, ctx_path)
                     if member:
                         class_body.append(member)
-
+            
             if ctx_path in self.all_mounts:
                 for mounted_path in self.all_mounts[ctx_path]:
                     if mounted_path in self.all_regs:
@@ -266,7 +362,7 @@ class TypeGenerator:
                             member = self._create_registered_member(reg_name, info, mounted_path)
                             if member:
                                 class_body.append(member)
-
+            
             if len(class_body) > 1:
                 classes.append(ast.ClassDef(
                     name=proto_name,
@@ -275,64 +371,107 @@ class TypeGenerator:
                     body=class_body,
                     decorator_list=[]
                 ))
-
-        referenced = set()
+        
+        referenced_protocols = set()
         for cls in classes:
             for node in ast.walk(cls):
-                if isinstance(node, ast.Name) and node.id.startswith("ExtendContext_"):
-                    referenced.add(node.id)
-
-        for ref in referenced:
-            if ref not in created:
-                created.add(ref)
-                ctx_path_parts = ref.replace("ExtendContext_", "").split("_")
-                ctx_path = ".".join([p.lower() for p in ctx_path_parts])
+                if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value.startswith("ExtendContext_"):
+                    referenced_protocols.add(node.value)
+        
+        for ref_name in referenced_protocols:
+            if ref_name not in created:
+                created.add(ref_name)
+                ctx_path = ref_name.replace("ExtendContext_", "").lower().replace("_", ".")
                 
                 classes.append(ast.ClassDef(
-                    name=ref,
+                    name=ref_name,
                     bases=[ast.Name(id='Protocol', ctx=ast.Load())],
                     keywords=[],
                     body=[ast.Expr(value=ast.Constant(value=f'Auto-generated Extend protocol for {ctx_path}'))],
                     decorator_list=[],
                 ))
-
         return classes
+
+    def _create_inject_protocols(self) -> list:
+        classes = []
+        
+        for module_path, inject_list in self.all_injects.items():
+            if not inject_list:
+                continue
+                
+            proto_name = self._path_to_protocol_name(f"{module_path}.ctx", "ExtendContext")
+            
+            class_body = [ast.Expr(value=ast.Constant(value=f'Auto-generated Extend protocol for {module_path} with inject dependencies'))]
+            
+            for inject_name in inject_list:
+                member = self._create_inject_member(inject_name, module_path)
+                if member:
+                    class_body.append(member)
+            
+            if len(class_body) > 1:
+                classes.append(ast.ClassDef(
+                    name=proto_name,
+                    bases=[ast.Name(id='Protocol', ctx=ast.Load())],
+                    keywords=[],
+                    body=class_body,
+                    decorator_list=[]
+                ))
+        
+        return classes
+
+    def _find_dependency_type(self, inject_name: str, module_path: str):
+        ctx_path = f"{module_path}.ctx"
+        if ctx_path in self.all_regs and inject_name in self.all_regs[ctx_path]:
+            info = self.all_regs[ctx_path][inject_name]
+            return self._create_registered_member(inject_name, info, ctx_path)
+        
+        for ctx_path, regs in self.all_regs.items():
+            if inject_name in regs:
+                info = regs[inject_name]
+                return self._create_registered_member(inject_name, info, ctx_path)
+        
+        return self._create_fallback_annotation(inject_name)
+
+    def _create_inject_member(self, name: str, module_path: str):
+        member = self._find_dependency_type(name, module_path)
+        return member
 
     def _is_external_context(self, ctx_path: str) -> bool:
         if ctx_path in self.local_contexts:
             return False
         
         parts = ctx_path.split('.')
-        if len(parts) > 1 and parts[0] != 'src':
+        if len(parts) > 1:
             return True
             
         return False
 
-    def _generate_protocol_name(self, ctx_path: str) -> str:
-        if ctx_path.startswith('src.'):
-            clean_path = ctx_path
-        else:
-            clean_path = ctx_path
-            
-        return "ExtendContext_" + "_".join(self._pascalize(p) for p in clean_path.split('.'))
-
     def _create_module_header(self) -> list:
-        return [
-            ast.Expr(value=ast.Constant(value='Auto-generated types')),
-            self._create_imports()
-        ]
+        header = [ast.Expr(value=ast.Constant(value='Auto-generated types'))]
+        header.extend(self._create_imports())
+        return header
 
-    def _create_imports(self) -> ast.ImportFrom:
+    def _create_imports(self) -> list[ast.ImportFrom]:
         typing_names = {
-            'Protocol', 'Optional', 'Awaitable', 'Any', 
-            'Callable', 'Union'
+            'Protocol', 'Optional', 'Awaitable', 'Any',
+            'Callable', 'Union', 'List'
         }
-        imp = ast.ImportFrom(
+        
+        imports = []
+        
+        imports.append(ast.ImportFrom(
             module='typing',
             names=[ast.alias(name=n, asname=None) for n in sorted(typing_names)],
             level=0
-        )
-        return imp
+        ))
+
+        imports.append(ast.ImportFrom(
+            module=self.ctx_import_path,
+            names=[ast.alias(name="Context", asname=None)],
+            level=0
+        ))
+        
+        return imports
 
     def _create_registered_member(self, reg_name: str, info: dict, parent_ctx: str):
         typ = info.get('type')
@@ -340,44 +479,62 @@ class TypeGenerator:
         if typ == 'ctx':
             return self._create_subcontext_annotation(reg_name, f"{parent_ctx}.{reg_name}")
         elif typ in self.registered_fn_keys and typ in self.all_funcs:
-            return self._create_function_method(reg_name, typ)
+            return self._create_function_method(reg_name, typ, parent_ctx)
         else:
             return self._create_fallback_annotation(reg_name)
 
     def _create_subcontext_annotation(self, name: str, full_ctx_path: str) -> ast.AnnAssign:
-        protocol_name = self._generate_protocol_name(full_ctx_path)
+        protocol_name = self._get_context_protocol_name(full_ctx_path)
         return ast.AnnAssign(
             target=ast.Name(id=name, ctx=ast.Store()),
-            annotation=ast.Name(id=f"'{protocol_name}'", ctx=ast.Load()),
+            annotation=ast.Constant(value=protocol_name),
             value=None,
             simple=1
         )
 
-    def _create_function_method(self, reg_name: str, func_key: str):
+    def _create_function_method(self, reg_name: str, func_key: str, ctx_path: str):
         fn_node = self.all_funcs[func_key]
-        return self._convert_function_to_method(fn_node, reg_name)
+        
+        new_fn_node = fn_node 
+        if fn_node.returns and isinstance(fn_node.returns, ast.Name):
+            class_name = fn_node.returns.id
+            class_key = next((k for k in self.all_classes if k.endswith('.' + class_name)), None)
+            if class_key:
+                new_returns = ast.Name(
+                    id=self._get_class_protocol_name(class_key),
+                    ctx=ast.Load()
+                )
+                
+                if isinstance(fn_node, ast.FunctionDef):
+                    new_fn_node = ast.FunctionDef(
+                        name=fn_node.name, args=fn_node.args, body=fn_node.body,
+                        decorator_list=fn_node.decorator_list, returns=new_returns
+                    )
+                else:
+                    new_fn_node = ast.AsyncFunctionDef(
+                        name=fn_node.name, args=fn_node.args, body=fn_node.body,
+                        decorator_list=fn_node.decorator_list, returns=new_returns
+                    )
+                
+        return self._convert_function_to_method(new_fn_node, reg_name)
 
     def _convert_function_to_method(self, fn_node: Union[ast.FunctionDef, ast.AsyncFunctionDef], method_name: str):
         new_args = self._build_method_args(fn_node.args)
-        
         returns = self._build_method_returns(fn_node)
+        body = [ast.Expr(value=ast.Constant(value=Ellipsis))]
+        
+        common_args = {
+            'name': method_name,
+            'args': new_args,
+            'body': body,
+            'decorator_list': [],
+            'returns': returns
+        }
         
         if isinstance(fn_node, ast.AsyncFunctionDef):
-            return ast.AsyncFunctionDef(
-                name=method_name,
-                args=new_args,
-                body=[ast.Expr(value=ast.Constant(value=Ellipsis))],
-                decorator_list=[],
-                returns=returns
-            )
+            return ast.AsyncFunctionDef(**common_args)
         else:
-            return ast.FunctionDef(
-                name=method_name,
-                args=new_args,
-                body=[ast.Expr(value=ast.Constant(value=Ellipsis))],
-                decorator_list=[],
-                returns=returns
-            )
+            return ast.FunctionDef(**common_args)
 
     def _build_method_args(self, original_args: ast.arguments) -> ast.arguments:
         new_args_list = [ast.arg(arg='self')]
@@ -412,7 +569,7 @@ class TypeGenerator:
 
     def _create_fallback_annotation(self, name: str) -> ast.AnnAssign:
         default_callable = ast.parse(
-            'Callable[..., Awaitable[Any]]', 
+            'Callable[..., Awaitable[Any]]',
             mode='eval'
         ).body
         
@@ -429,19 +586,19 @@ class TypeGenerator:
             simple=1
         )
 
-
 def _get_module_prefix(file_path: str) -> str:
     rel_path = os.path.relpath(file_path)
     rel_no_ext = os.path.splitext(rel_path)[0]
     parts = [p for p in rel_no_ext.split(os.sep) if p]
     return '.'.join(parts)
 
-
-def scan_directory(src_dir: str) -> tuple[dict, dict, set, dict]:
+def scan_directory(src_dir: str) -> tuple[dict, dict, dict, set, dict, dict]:
     all_funcs = {}
+    all_classes = {}
     all_local_contexts = set()
     visitors = {}
-
+    all_injects = {}
+    
     for root, _, files in os.walk(src_dir):
         for filename in files:
             if filename.endswith('.py'):
@@ -455,23 +612,25 @@ def scan_directory(src_dir: str) -> tuple[dict, dict, set, dict]:
                     
                     visitor = RegisterVisitor(mod_name)
                     visitor.visit(tree)
-
                     visitors[mod_name] = visitor
                     all_funcs.update(visitor.functions)
+                    all_classes.update(visitor.classes)
                     all_local_contexts.update(visitor.local_contexts)
+                    
+                    if visitor.inject_list is not None:
+                        all_injects[mod_name] = visitor.inject_list
+                        
                 except Exception as e:
                     print(f"Error scanning file {file_path}: {e}")
-
+    
     all_mounts = defaultdict(list)
     for mod_name, visitor in visitors.items():
         for func_base, func_attr, arg_names in visitor.calls:
             if not arg_names:
                 continue
-
             caller_ctx_path = None
             callee_module_name = None
             func_name = func_attr or func_base
-
             if 'apply' in func_name.lower():
                 ctx_arg_name = arg_names[0]
                 caller_ctx_path = visitor.var_ctx_map.get(ctx_arg_name)
@@ -486,7 +645,7 @@ def scan_directory(src_dir: str) -> tuple[dict, dict, set, dict]:
             elif func_attr and 'add_sub_module' in func_attr.lower():
                 caller_ctx_path = visitor.var_ctx_map.get(func_base)
                 callee_module_name = arg_names[0]
-
+                
             if caller_ctx_path and callee_module_name:
                 callee_module_path = visitor.imports.get(callee_module_name, callee_module_name)
                 
@@ -500,12 +659,11 @@ def scan_directory(src_dir: str) -> tuple[dict, dict, set, dict]:
             if ctx_name not in all_regs:
                 all_regs[ctx_name] = {}
             all_regs[ctx_name].update(reg_info)
+    
+    return all_regs, all_funcs, all_classes, all_local_contexts, all_mounts, all_injects
 
-    return all_regs, all_funcs, all_local_contexts, all_mounts
-
-
-def save_generated_types(all_regs: dict, all_funcs: dict, local_contexts: set, all_mounts: dict, save_path: str, ctx_path:str, ctx_import_path: str):
-    generator = TypeGenerator(all_regs, all_funcs, ctx_path, ctx_import_path, local_contexts, all_mounts)
+def save_generated_types(all_regs: dict, all_funcs: dict, all_classes: dict, local_contexts: set, all_mounts: dict, all_injects: dict, save_path: str, ctx_path:str, ctx_import_path: str):
+    generator = TypeGenerator(all_regs, all_funcs, all_classes, ctx_path, ctx_import_path, local_contexts, all_mounts, all_injects)
     module_ast = generator.generate_module()
     
     with open(save_path, 'w', encoding='utf-8') as f:
@@ -513,7 +671,6 @@ def save_generated_types(all_regs: dict, all_funcs: dict, local_contexts: set, a
     
     print(f"Saved context types -> {save_path}")
 
-
 def main():
-    registrations, functions, local_ctxs, mounts = scan_directory("./noishi")
-    save_generated_types(registrations, functions, local_ctxs, mounts, "./noishi/etype/ctx.py", "./noishi/ctx.py", "noishi.ctx")
+    registrations, functions, classes, local_ctxs, mounts, injects = scan_directory("./noishi")
+    save_generated_types(registrations, functions, classes, local_ctxs, mounts, injects, "./noishi/etype/ctx.py", "./noishi/ctx.py", "noishi.ctx")

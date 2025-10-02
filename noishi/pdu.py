@@ -1,4 +1,12 @@
-from noishi.ctx import Context
+from noishi.ctx import Context as RawContext
+from noishi import logger as Logger
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from noishi.etype.ctx import ExtendContext_Noishi_Pdu as ExtendContext
+    class Context(ExtendContext, RawContext): ...
+else:
+    Context = RawContext
 
 GSM_7BIT_TABLE: tuple[str, ...] = (
     '@', '£', '$', '¥', 'è', 'é', 'ù', 'ì', 'ò', 'Ç', '\n', 'Ø', 'ø', '\r', 'Å', 'å',
@@ -48,7 +56,7 @@ def decode_7bit(user_data_hex: str, length: int) -> str:
         i += 7
     return ''.join([GSM_7BIT_TABLE[s] if s < len(GSM_7BIT_TABLE) else '?' for s in septets])
 
-def decode_pdu(pdu: str) -> tuple[str, str, str]:
+async def decode_pdu(logger: Logger.Logger,pdu: str) -> tuple[str, str, str]:
     """解码 PDU 格式短信，返回 SCA、发送者和短信文本"""
     sca_length: int = int(pdu[0:2], 16)
     sca_end: int = 2 + sca_length*2
@@ -76,18 +84,30 @@ def decode_pdu(pdu: str) -> tuple[str, str, str]:
     user_data_bytes: bytearray = bytearray.fromhex(user_data_hex)
 
     # 根据 DCS 判断编码
-    if dcs == 8:  # UCS2 编码
+    if dcs == 8:
+        await logger.debug("UCS2 编码")
         text: str = user_data_bytes[:udl*2].decode('utf-16-be')
-    elif dcs & 0x0C == 0x00:  # GSM 7-bit 默认
+    elif dcs & 0x0C == 0x00:
+        await logger.debug("GSM 7-bit 编码")
         text: str = decode_7bit(user_data_hex, udl)
-    elif dcs & 0x0C == 0x04:  # 8-bit 编码
+    elif dcs & 0x0C == 0x04:
+        await logger.debug("8-bit 编码")
         text: str = user_data_bytes[:udl].decode('latin-1')
     else:
+        await logger.debug("未知编码")
         text: str = user_data_bytes.hex()
 
     return sca_number, sender, text
 
 def apply(ctx: Context):
+    logger = ctx.logger("pdu")
     sub = ctx.register('pdu')
-    sub.register('decode',decode_pdu)
+    
+    async def _decode_pdu(pdu: str) -> tuple[str, str, str]:
+        """解码 PDU 格式短信，返回 SCA、发送者和短信文本"""
+        return await decode_pdu(logger,pdu)
+    
+    sub.register('decode',_decode_pdu)
     return sub
+
+inject = ["logger"]

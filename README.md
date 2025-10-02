@@ -31,4 +31,5 @@ pdm run main
 - [x] `Context`基础实现
 - [x] 事件管理
 - [x] Demo
+- [ ] 热重载
 - [ ] [类型提示](./res/type.md)
