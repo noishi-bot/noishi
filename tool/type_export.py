@@ -167,7 +167,11 @@ class RegisterVisitor(ast.NodeVisitor):
         elif isinstance(arg_node, ast.Lambda):
             return '<lambda>'
         elif isinstance(arg_node, ast.Call):
-            return ast.unparse(arg_node.func).strip()
+            class_name = ast.unparse(arg_node.func).strip()
+            full_key = f"{self.module_prefix}.{class_name}"
+            if full_key in self.classes:
+                return full_key
+            return class_name
         return None
 
     def _is_context_call(self, node: ast.Call) -> bool:
@@ -210,20 +214,11 @@ class TypeGenerator:
         self.local_contexts = local_contexts
         self.all_mounts = all_mounts
         self.all_injects = all_injects
-        self.registered_fn_keys = self._collect_registered_function_keys()
         self.dependency_classes = set()
 
-    def _collect_registered_function_keys(self) -> set:
-        keys = set()
-        for ctx_name, regs in self.all_regs.items():
-            for reg_name, info in regs.items():
-                typ = info.get('type')
-                if (typ and isinstance(typ, str)
-                        and typ != 'ctx' and not typ.startswith('<')):
-                    keys.add(typ)
-        return keys
-
     def generate_module(self) -> ast.Module:
+        self._collect_all_dependencies()
+        
         module = ast.Module(body=[], type_ignores=[])
         module.body.extend(self._create_module_header())
         module.body.extend(self._create_dependency_protocols())
@@ -232,13 +227,34 @@ class TypeGenerator:
         ast.fix_missing_locations(module)
         return module
 
+    def _collect_all_dependencies(self):
+        registered_types = set()
+        for regs in self.all_regs.values():
+            for info in regs.values():
+                typ = info.get('type')
+                if typ and isinstance(typ, str) and typ != 'ctx' and not typ.startswith('<'):
+                    registered_types.add(typ)
+
+        for typ in registered_types:
+            if typ in self.all_funcs:
+                fn_node = self.all_funcs[typ]
+                if fn_node.returns:
+                    self._collect_dependencies_from_node(fn_node.returns)
+            
+            if typ in self.all_classes:
+                self.dependency_classes.add(typ)
+            else:
+                class_key = next((k for k in self.all_classes if k.endswith('.' + typ)), None)
+                if class_key:
+                    self.dependency_classes.add(class_key)
+
     def _pascalize(self, name: str) -> str:
         if not name:
             return ""
         parts = [p for p in re.split(r"[^0-9a-zA-Z]+", name) if p]
         if not parts:
-            return name.capitalize()
-        return ''.join(p.capitalize() for p in parts)
+            return name[0].upper() + name[1:] if name else ""
+        return ''.join(p[0].upper() + p[1:] for p in parts)
     
     def _path_to_protocol_name(self, path: str, prefix: str) -> str:
         if not path:
@@ -254,7 +270,7 @@ class TypeGenerator:
     def _get_context_protocol_name(self, ctx_path: str) -> str:
         return self._path_to_protocol_name(ctx_path, prefix="ExtendContext")
 
-    def _collect_dependencies(self, node):
+    def _collect_dependencies_from_node(self, node):
         for child in ast.walk(node):
             if isinstance(child, ast.Name) and child.id in [cls.split('.')[-1] for cls in self.all_classes]:
                 full_key = next((k for k in self.all_classes if k.endswith('.' + child.id)), None)
@@ -283,17 +299,10 @@ class TypeGenerator:
             
     def _create_dependency_protocols(self) -> list:
         protocols = []
-        
-        for ctx_path in self.all_regs:
-            for reg_name, info in self.all_regs[ctx_path].items():
-                typ = info.get('type')
-                if typ in self.registered_fn_keys and typ in self.all_funcs:
-                    fn_node = self.all_funcs[typ]
-                    if fn_node.returns:
-                        self._collect_dependencies(fn_node.returns)
-
         created = set()
         for class_key in sorted(self.dependency_classes):
+            if class_key not in self.all_classes:
+                continue
             class_node = self.all_classes[class_key]
             proto_name = self._get_class_protocol_name(class_key)
             
@@ -454,7 +463,7 @@ class TypeGenerator:
     def _create_imports(self) -> list[ast.ImportFrom]:
         typing_names = {
             'Protocol', 'Optional', 'Awaitable', 'Any',
-            'Callable', 'Union', 'List'
+            'Callable', 'Union'
         }
         
         imports = []
@@ -478,10 +487,27 @@ class TypeGenerator:
         
         if typ == 'ctx':
             return self._create_subcontext_annotation(reg_name, f"{parent_ctx}.{reg_name}")
-        elif typ in self.registered_fn_keys and typ in self.all_funcs:
+
+        if typ in self.all_classes:
+            return self._create_class_property(reg_name, typ)
+        
+        if typ in self.all_funcs:
             return self._create_function_method(reg_name, typ, parent_ctx)
-        else:
-            return self._create_fallback_annotation(reg_name)
+
+        class_key = next((k for k in self.all_classes if k.endswith('.' + typ)), None)
+        if class_key:
+            return self._create_class_property(reg_name, class_key)
+
+        return self._create_fallback_annotation(reg_name)
+
+    def _create_class_property(self, name: str, class_key: str) -> ast.AnnAssign:
+        protocol_name = self._get_class_protocol_name(class_key)
+        return ast.AnnAssign(
+            target=ast.Name(id=name, ctx=ast.Store()),
+            annotation=ast.Name(id=protocol_name, ctx=ast.Load()),
+            value=None,
+            simple=1
+        )
 
     def _create_subcontext_annotation(self, name: str, full_ctx_path: str) -> ast.AnnAssign:
         protocol_name = self._get_context_protocol_name(full_ctx_path)

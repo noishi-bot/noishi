@@ -9,3 +9,6 @@ class SubModuleInjectError(SubModuleError,InjectError):
 
 class SubModuleNoExistApplyError(SubModuleError): 
     pass
+
+class SubModuleApplyArgsError(SubModuleError): 
+    pass

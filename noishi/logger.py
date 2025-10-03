@@ -2,7 +2,7 @@ import datetime
 import asyncio
 from typing import Optional
 
-from noishi.ctx import Context, Event
+from noishi import Context, Event
 
 class LogEvent(Event):
     def __init__(self, level: str, message: str, timestamp: Optional[datetime.datetime] = None):

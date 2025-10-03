@@ -5,7 +5,7 @@ description = "一个Context的Python实现。"
 authors = [
     {name = "Shua-github", email = "CHA_shua@outlook.com"},
 ]
-dependencies = []
+dependencies = ["watchdog>=6.0.0", "pyserial-asyncio>=0.6"]
 requires-python = ">=3.10"
 readme = "README.md"
 license = {text = "MIT"}
@@ -17,3 +17,7 @@ distribution = true
 [tool.pdm.scripts]
 main.call = "noishi.main:main"
 gentype.call = "tool.type_export:main"
+
+[tool.setuptools]
+packages = ["noishi"]
+

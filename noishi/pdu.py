@@ -1,4 +1,4 @@
-from noishi.ctx import Context as RawContext
+from noishi import Context as RawContext
 from noishi import logger as Logger
 from typing import TYPE_CHECKING
 

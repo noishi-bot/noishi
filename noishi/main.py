@@ -1,24 +1,33 @@
-from noishi.ctx import Context as RawContext
-from noishi import pdu
+from noishi import Context as RawContext
+from noishi import pdu, serial, sms, hot_reload
 from noishi import logger as Logger
 from typing import TYPE_CHECKING
+import asyncio
 
 if TYPE_CHECKING:
     from noishi.etype.ctx import ExtendContext_Noishi_Main as ExtendContext
     class Context(ExtendContext, RawContext): ...
 else:
     Context = RawContext
-        
+
 def main():
-    import asyncio
     async def _main():
         ctx = Context()
         ctx.add_sub_module(Logger)
         ctx.add_sub_module(pdu)
-        logger = ctx.logger("main")
-        sca_number, sender, text = await ctx.pdu.decode("07915892206747F7040D91181154419181F0000852900341933540046D4B8BD5")
-        await logger.info(f"\n短信中心:{sca_number}\n发送者:{sender}\n正文:{text}")
-        await asyncio.sleep(1)
+        ctx.add_sub_module(serial, port="COM11")
+        ctx.add_sub_module(sms)
+        
+        hot_reload_list = [serial]
+        asyncio.create_task(hot_reload.start_hot_reload(ctx,hot_reload_list,asyncio.get_running_loop()))
+        
+        try:
+            while True:
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            pass
+            
+
     asyncio.run(_main())
 
 
