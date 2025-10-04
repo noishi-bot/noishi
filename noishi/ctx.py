@@ -13,10 +13,11 @@ class Event:
     """事件基类，所有自定义事件都应继承此类"""
     pass
 
+#服务接口基类
 class Service(ABC):
     """服务基类，提供统一的生命周期管理"""
     def __init__(self, ctx: 'Context'):
-        self.ctx = ctx  # 持有上下文引用
+        self.ctx = ctx  # 上下文引用
 
     @abstractmethod
     def unregister(self) -> None:
