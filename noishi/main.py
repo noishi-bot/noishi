@@ -1,6 +1,7 @@
 from noishi import Context as RawContext
 from noishi import pdu, serial, sms, hot_reload
 from noishi import logger as Logger
+from noishi import console_logger
 from typing import TYPE_CHECKING
 import asyncio
 
@@ -19,7 +20,7 @@ def main():
         ctx.add_sub_module(pdu)
         ctx.add_sub_module(serial, port="COM11")  # 配置串口
         ctx.add_sub_module(sms)
-        
+        ctx.add_sub_module(console_logger)
         # 配置热重载模块列表
         hot_reload_list = [serial]
         asyncio.create_task(hot_reload.start_hot_reload(ctx,hot_reload_list,asyncio.get_running_loop()))
