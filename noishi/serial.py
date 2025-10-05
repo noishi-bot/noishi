@@ -1,8 +1,10 @@
 import asyncio
 import serial_asyncio
+import weakref
 from noishi import Context, Service
 from noishi.event.serial import SerialDataSent, SerialDataReceived, SerialWriteRequest
-class SerialService(Service):
+
+class SerialService(Service[Context]):
     def __init__(self, ctx: Context, port: str, baudrate: int = 115200):
         super().__init__(ctx)
         self.port = port
@@ -29,18 +31,19 @@ class SerialService(Service):
         if self.transport:
             self.transport.close()
         self.ctx.unregister_event_handler(self.handle_write)
-        del self.ctx
 
 class SerialProtocol(asyncio.Protocol):
     def __init__(self, service: SerialService):
-        self.service = service
+        self.service_ref = weakref.ref(service)
         self.buffer = bytearray()
 
     def data_received(self, data: bytes):
         self.buffer.extend(data)
-        asyncio.create_task(self.service.ctx.send_event(
-            SerialDataReceived(self.service.port, bytes(data))
-        ))
+        service = self.service_ref()
+        if service is not None and service._running:
+            asyncio.create_task(service.ctx.send_event(
+                SerialDataReceived(service.port, bytes(data))
+            ))
 
 def apply(ctx: Context, port: str, baudrate: int = 115200):
     ctx.register("serial", SerialService(ctx, port, baudrate))

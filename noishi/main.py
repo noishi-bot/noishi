@@ -19,7 +19,8 @@ def main():
         ctx.add_sub_module(serial, port="COM3")
         ctx.add_sub_module(sms)
         
-        auto_hot_reload_list = [serial,pdu,sms]
+        # 目前pdu不支持热重载,logger无需重载
+        auto_hot_reload_list = [serial,sms]
         asyncio.create_task(auto_hot_reload(ctx,auto_hot_reload_list,asyncio.get_running_loop()))
         
         try:

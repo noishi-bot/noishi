@@ -1,6 +1,6 @@
 import asyncio
 from collections import defaultdict
-from typing import Callable, Type, Optional, Union, Any, TypeAlias, get_args, overload
+from typing import Callable, Type, Optional, Union, Any, TypeAlias, get_args, overload, TypeVar, Generic
 import inspect
 import functools
 import types
@@ -8,12 +8,14 @@ from abc import ABC, abstractmethod
 import importlib
 from noishi.exception import SubModuleInjectError, SubModuleNoExistApplyError, SubModuleApplyArgsError
 
+T = TypeVar("T", bound='Context')
+
 # ---------------------- Event & Service ----------------------
 class Event:
     pass
 
-class Service(ABC):
-    def __init__(self, ctx: 'Context'):
+class Service(ABC,Generic[T]):
+    def __init__(self, ctx: T | 'Context'):
         self.ctx = ctx
 
     @abstractmethod

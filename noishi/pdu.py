@@ -8,17 +8,6 @@ if TYPE_CHECKING:
 else:
     Context = RawContext
 
-GSM_7BIT_TABLE: tuple[str, ...] = (
-    '@', '£', '$', '¥', 'è', 'é', 'ù', 'ì', 'ò', 'Ç', '\n', 'Ø', 'ø', '\r', 'Å', 'å',
-    'Δ', '_', 'Φ', 'Γ', 'Λ', 'Ω', 'Π', 'Ψ', 'Σ', 'Θ', 'Ξ', '€', 'Æ', 'æ', 'ß', 'É',
-    ' ', '!', '"', '#', '¤', '%', '&', "'", '(', ')', '*', '+', ',', '-', '.', '/',
-    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':', ';', '<', '=', '>', '?',
-    '¡', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O',
-    'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'Ä', 'Ö', 'Ñ', 'Ü', '§',
-    '¿', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o',
-    'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', 'ä', 'ö', 'ñ', 'ü', 'à'
-)
-
 def swap_nibbles(s: str) -> str:
     """交换十六进制字符串中的半字节"""
     return ''.join([s[i+1]+s[i] for i in range(0, len(s), 2)])
@@ -44,6 +33,16 @@ def decode_sca(sca_hex: str, sca_length_octets: int) -> str:
     return number
 
 def decode_7bit(user_data_hex: str, length: int) -> str:
+    GSM_7BIT_TABLE: tuple[str, ...] = (
+    '@', '£', '$', '¥', 'è', 'é', 'ù', 'ì', 'ò', 'Ç', '\n', 'Ø', 'ø', '\r', 'Å', 'å',
+    'Δ', '_', 'Φ', 'Γ', 'Λ', 'Ω', 'Π', 'Ψ', 'Σ', 'Θ', 'Ξ', '€', 'Æ', 'æ', 'ß', 'É',
+    ' ', '!', '"', '#', '¤', '%', '&', "'", '(', ')', '*', '+', ',', '-', '.', '/',
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':', ';', '<', '=', '>', '?',
+    '¡', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O',
+    'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'Ä', 'Ö', 'Ñ', 'Ü', '§',
+    '¿', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o',
+    'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', 'ä', 'ö', 'ñ', 'ü', 'à'
+    )
     data = bytearray.fromhex(user_data_hex)
     result = []
 
@@ -100,6 +99,7 @@ async def decode_pdu(logger: Logger.Logger,pdu: str) -> tuple[str, str, str]:
     return sca_number, sender, text
 
 def apply(ctx: Context):
+    # TODO: 热重载支持
     logger = ctx.logger("pdu")
     sub = ctx.register('pdu')
     
