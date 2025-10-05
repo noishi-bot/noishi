@@ -1,5 +1,6 @@
 from noishi import Context as RawContext
-from noishi import pdu, serial, sms, hot_reload
+from noishi import pdu, serial, sms
+from noishi import auto_hot_reload
 from noishi import logger as Logger
 from typing import TYPE_CHECKING
 import asyncio
@@ -15,18 +16,17 @@ def main():
         ctx = Context()
         ctx.add_sub_module(Logger)
         ctx.add_sub_module(pdu)
-        ctx.add_sub_module(serial, port="COM11")
+        ctx.add_sub_module(serial, port="COM3")
         ctx.add_sub_module(sms)
         
-        hot_reload_list = [serial]
-        asyncio.create_task(hot_reload.start_hot_reload(ctx,hot_reload_list,asyncio.get_running_loop()))
+        auto_hot_reload_list = [serial,pdu,sms]
+        asyncio.create_task(auto_hot_reload(ctx,auto_hot_reload_list,asyncio.get_running_loop()))
         
         try:
             while True:
                 await asyncio.sleep(1)
         except asyncio.CancelledError:
             pass
-            
 
     asyncio.run(_main())
 

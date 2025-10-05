@@ -51,7 +51,7 @@ class AutoReloadHandler(FileSystemEventHandler):
             stack_str = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
             print(stack_str)
 
-async def start_hot_reload(ctx: Context, modules: list[types.ModuleType], loop: asyncio.AbstractEventLoop):
+async def auto_hot_reload(ctx: Context, modules: list[types.ModuleType], loop: asyncio.AbstractEventLoop):
     event_handler = AutoReloadHandler(ctx, modules, loop)
     observer = Observer()
     for mod in modules:

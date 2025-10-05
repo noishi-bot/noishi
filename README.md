@@ -1,5 +1,5 @@
 # Noishi
-一个`Context`的`Python`实现。
+一个`Python`实现的依赖注入和事件框架。
 
 ## 状态
 - 类型提示实现暂未完整,详情查看[类型提示](./res/type.md)  

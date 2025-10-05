@@ -1,7 +1,7 @@
 [project]
 name = "noishi"
 version = "0.1.0"
-description = "一个Context的Python实现。"
+description = "一个依赖注入和事件框架。"
 authors = [
     {name = "Shua-github", email = "CHA_shua@outlook.com"},
 ]

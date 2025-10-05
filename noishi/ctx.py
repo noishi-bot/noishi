@@ -1,6 +1,6 @@
 import asyncio
 from collections import defaultdict
-from typing import Callable, Type, Optional, Union, Any, TypeAlias, get_args
+from typing import Callable, Type, Optional, Union, Any, TypeAlias, get_args, overload
 import inspect
 import functools
 import types
@@ -20,7 +20,7 @@ class Service(ABC):
     def unregister(self) -> None:
         pass
 
-handler_type: TypeAlias = Union['Service', Callable[..., Any], 'Context', Any]
+handler_type: TypeAlias = Union[Service, Callable[..., Any], 'Context', Any]
 
 # ---------------------- Context ----------------------
 class Context:
@@ -30,6 +30,26 @@ class Context:
         self._module_info: dict[str, dict[str,Union[types.ModuleType,list,tuple,dict]]] = {}  # module_name -> {"module": module, "names": [], "args":(), "kwargs":{}}
         self._tracking_module: Optional[str] = None
 
+    @overload
+    def register(self, name: str) -> 'Context': 
+        "创建并注册子Context。"
+        pass
+    
+    @overload
+    def register(self, name: str, handler: Callable[..., Any]) -> 'Context': 
+        "注册函数。"
+        pass
+    
+    @overload
+    def register(self, name: str, handler: 'Context') -> 'Context': 
+        "注册子Context。"
+        pass
+    
+    @overload
+    def register(self, name: str, handler: Any) -> 'Context': 
+        "注册对象。"
+        pass
+    
     def register(self, name: str, handler: Optional[handler_type] = None) -> 'Context':
         if name in self._handler:
             raise ValueError(f"已有同名对象 '{name}' 注册。")
@@ -43,6 +63,7 @@ class Context:
         return result if handler is not None else result
 
     def get(self, path: str) -> handler_type:
+        "通过路径获取对象。"
         parts = path.split('.', 1)
         key = parts[0]
         if key not in self._handler:
@@ -63,6 +84,7 @@ class Context:
         raise AttributeError(f"没有名为 '{name}' 的对象。")
 
     def unregister(self, name: str | None = None) -> None:
+        "注销对象。"
         if name is None:
             for key in list(self._handler.keys()):
                 self.unregister(key)
@@ -82,11 +104,13 @@ class Context:
         del self._handler[name]
 
     def reload(self, name: str, handler: handler_type) -> 'Context':
+        "重载对象。"
         if name in self._handler:
             self.unregister(name)
         return self.register(name, handler)
 
     def register_event_handler(self, func: Callable) -> Callable:
+        "注册事件处理器"
         if not asyncio.iscoroutinefunction(func):
             raise TypeError("事件处理器必须是异步函数。")
 
@@ -147,6 +171,7 @@ class Context:
         return func
 
     def unregister_event_handler(self, func: Callable) -> None:
+        "注销事件处理器"
         found = [(et, cb) for et, listeners in self._event_handler.items()
                  for cb in listeners if getattr(cb, '__wrapped__', None) == func]
         if not found:
@@ -156,6 +181,7 @@ class Context:
         self._event_handler = {k: v for k, v in self._event_handler.items() if v}
 
     async def send_event(self, *events: Event) -> None:
+        "发送事件。"
         seen = set()
         tasks = []
         for event in events:
@@ -170,6 +196,7 @@ class Context:
             await asyncio.gather(*tasks)
 
     def add_sub_module(self, module: types.ModuleType, *args, **kwargs):
+        "添加子模块。"
         func = getattr(module, "apply", None)
         if not callable(func):
             raise SubModuleNoExistApplyError(f"模块 {module.__name__} 未实现 apply。")
@@ -189,12 +216,14 @@ class Context:
         return [self._handler[name] for name in self._module_info[module.__name__]["names"]]
 
     def check_sub_module_inject(self, module: types.ModuleType) -> bool:
+        "检查子模块inject。"
         inject = getattr(module, "inject", None)
         if isinstance(inject, list):
             return all(k in self._handler for k in inject)
         return True
 
     def reload_sub_module(self, module_name: str, *args, **kwargs) -> Any:
+        "重载子模块。"
         if module_name not in self._module_info:
             raise ValueError(f"模块 {module_name} 未注册，无法重载。")
         

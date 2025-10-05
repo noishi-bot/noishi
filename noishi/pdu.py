@@ -44,17 +44,17 @@ def decode_sca(sca_hex: str, sca_length_octets: int) -> str:
     return number
 
 def decode_7bit(user_data_hex: str, length: int) -> str:
-    """解码 GSM 7-bit 编码的短信内容"""
-    bits: str = ''.join([bin(int(user_data_hex[i:i+2], 16))[2:].zfill(8) for i in range(0, len(user_data_hex), 2)])
-    septets: list[int] = []
-    i: int = 0
-    while len(septets) < length:
-        septet: str = bits[i:i+7]
-        if len(septet) < 7:
-            septet = septet.ljust(7, '0')
-        septets.append(int(septet[::-1], 2))
-        i += 7
-    return ''.join([GSM_7BIT_TABLE[s] if s < len(GSM_7BIT_TABLE) else '?' for s in septets])
+    data = bytearray.fromhex(user_data_hex)
+    result = []
+
+    for i in range(length):
+        byte_index = (i * 7) // 8
+        shift = (i * 7) % 8
+        septet = (data[byte_index] >> shift) | ((data[byte_index + 1] << (8 - shift)) & 0x7F if shift > 1 else 0)
+        septet &= 0x7F
+        result.append(GSM_7BIT_TABLE[septet] if septet < len(GSM_7BIT_TABLE) else '?')
+    
+    return ''.join(result)
 
 async def decode_pdu(logger: Logger.Logger,pdu: str) -> tuple[str, str, str]:
     """解码 PDU 格式短信，返回 SCA、发送者和短信文本"""
