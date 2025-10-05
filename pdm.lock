@@ -5,10 +5,22 @@
 groups = ["default"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.0"
-content_hash = "sha256:bce44462ef736ddf90816b09070617c6b4e25ed231d5457a8cdf0bf3578f7740"
+content_hash = "sha256:650044ed47f0ca53c3f128efdcc159688ea0d80c1f7469425944081be5193b32"
 
 [[metadata.targets]]
 requires_python = ">=3.10"
+
+[[package]]
+name = "gsm0338"
+version = "1.1.0"
+requires_python = "<4.0,>=3.9"
+summary = "GSM 03.38 codec"
+groups = ["default"]
+files = [
+    {file = "gsm0338-1.1.0-py2.py3-none-any.whl", hash = "sha256:359c909e6eff6c176abf3831c945e59cc78fe21a9c18ff492fb3ef634d8d3ac7"},
+    {file = "gsm0338-1.1.0-py3-none-any.whl", hash = "sha256:3e5d0d95dd02b92ac152c87b11bd505736283e28ef5576e5263ae0b7db576889"},
+    {file = "gsm0338-1.1.0.tar.gz", hash = "sha256:d445d6a81b2b5d36f67cbb7db0f5b31dc66a1f02d9914d5479d318c7c85e1b7f"},
+]
 
 [[package]]
 name = "pyserial"
@@ -31,6 +43,17 @@ dependencies = [
 files = [
     {file = "pyserial-asyncio-0.6.tar.gz", hash = "sha256:b6032923e05e9d75ec17a5af9a98429c46d2839adfaf80604d52e0faacd7a32f"},
     {file = "pyserial_asyncio-0.6-py3-none-any.whl", hash = "sha256:de9337922619421b62b9b1a84048634b3ac520e1d690a674ed246a2af7ce1fc5"},
+]
+
+[[package]]
+name = "shua-struct"
+version = "0.1.0"
+requires_python = ">=3.10"
+summary = "Flexible binary data parsing and building for Python."
+groups = ["default"]
+files = [
+    {file = "shua_struct-0.1.0-py3-none-any.whl", hash = "sha256:2c1983bc5088f9c6b31e98cec28ba3e3482e1858e938e177c98fffcd339ed601"},
+    {file = "shua_struct-0.1.0.tar.gz", hash = "sha256:e33d80aa87e3c6a799075f65c29ac973cca7487954b5a285c3c5f6e6fd25c8fd"},
 ]
 
 [[package]]

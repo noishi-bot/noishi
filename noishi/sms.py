@@ -82,9 +82,9 @@ class AtSmsService(Service[Context]):
                                     pdu_line = lines[i + 1].strip()
                                     if pdu_line:
                                         try:
-                                            sca_number, sender, text = await self.ctx.pdu.decode(pdu_line)
+                                            sca_number, sender, text, text_type = self.ctx.pdu.decode(pdu_line)
                                             await self.logger.info(
-                                                f"\n短信中心: {sca_number}\n发送者: {sender}\n正文: {text}"
+                                                f"\n短信中心: {sca_number}\n发送者: {sender}\n正文: {text}\n正文编码类型: {text_type}"
                                             )
                                             if self.last_delete_index is not None:
                                                 await self.ctx.send_event(

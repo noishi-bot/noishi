@@ -5,7 +5,7 @@ description = "一个依赖注入和事件框架。"
 authors = [
     {name = "Shua-github", email = "CHA_shua@outlook.com"},
 ]
-dependencies = ["watchdog>=6.0.0", "pyserial-asyncio>=0.6"]
+dependencies = ["watchdog>=6.0.0", "pyserial-asyncio>=0.6", "gsm0338>=1.1.0", "shua-struct>=0.1.0"]
 requires-python = ">=3.10"
 readme = "README.md"
 license = {text = "MIT"}
