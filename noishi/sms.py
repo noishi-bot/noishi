@@ -8,21 +8,6 @@ if TYPE_CHECKING:
 else:
     Context = RawContext
 
-def at_expect(text: str, expected: str) -> list[str]:
-    result = []
-    lines = text.splitlines()
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        if line == "OK":
-            break
-        if line == "ERROR":
-            raise RuntimeError("AT command error")
-        if expected and line.startswith(expected):
-            result.append(line[len(expected):].lstrip())
-    return result
-
 class AtSmsService(Service[Context]):
     def __init__(self, ctx: Context):
         super().__init__(ctx)
@@ -40,7 +25,7 @@ class AtSmsService(Service[Context]):
         if not self._running:
             return
             
-        data_str = event.data.decode(errors="ignore")
+        data_str = event.data.decode()
         self.buffer += data_str
 
         while '\n' in self.buffer:
@@ -52,7 +37,7 @@ class AtSmsService(Service[Context]):
             await self.logger.debug(f"串口输入: {line}")
 
             if line.startswith('+CMTI:'):
-                cmti_data = at_expect(line, "+CMTI: ")
+                cmti_data = self.ctx.at.command.export(line, "+CMTI: ")
                 if cmti_data:
                     parts = cmti_data[0].split(',')
                     if len(parts) == 2:
@@ -60,7 +45,7 @@ class AtSmsService(Service[Context]):
                         self.last_delete_index = index
                         await self.logger.info(f"检测到新短信索引: {index}")
                         await self.ctx.send_event(
-                            serial.SerialWriteRequest(event.port, f"AT+CMGR={index}\r".encode())
+                            serial.SerialWriteRequest(event.port, self.ctx.at.command.build("+CMGR",index).encode())
                         )
                         self.pending_command = True
                         self.pending_lines.clear()
@@ -89,7 +74,7 @@ class AtSmsService(Service[Context]):
                                             if self.last_delete_index is not None:
                                                 await self.ctx.send_event(
                                                     serial.SerialWriteRequest(
-                                                        event.port, f"AT+CMGD={self.last_delete_index}\r".encode()
+                                                        event.port, self.ctx.at.command.build("+CMGD",self.last_delete_index,0).encode()
                                                     )
                                                 )
                                                 await self.logger.info(f"已删除短信索引: {self.last_delete_index}")
@@ -102,28 +87,6 @@ class AtSmsService(Service[Context]):
 
                     self.pending_lines.clear()
                 continue
-
-            if line.startswith('+CMGR:'):
-                if '\n' in self.buffer:
-                    pdu_line, self.buffer = self.buffer.split('\n', 1)
-                    pdu_line = pdu_line.strip()
-                    if pdu_line:
-                        try:
-                            sca_number, sender, text = await self.ctx.pdu.decode(pdu_line)
-                            await self.logger.info(
-                                f"\n短信中心: {sca_number}\n发送者: {sender}\n正文: {text}"
-                            )
-                            if self.last_delete_index is not None:
-                                await self.ctx.send_event(
-                                    serial.SerialWriteRequest(
-                                        event.port, f"AT+CMGD={self.last_delete_index}\r".encode()
-                                    )
-                                )
-                                await self.logger.info(f"已删除短信索引: {self.last_delete_index}")
-                                self.last_delete_index = None
-                        except Exception as e:
-                            await self.logger.error(f"PDU解码失败: {e}")
-                continue
     
     def unregister(self):
         self._running = False
@@ -132,4 +95,4 @@ class AtSmsService(Service[Context]):
 def apply(ctx: Context):
     ctx.register("sms", AtSmsService(ctx))
 
-inject = ["logger", "pdu", "serial"]
+inject = ["logger", "pdu", "at", "serial"]

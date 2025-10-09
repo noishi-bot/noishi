@@ -1,19 +1,20 @@
-from noishi import Context as RawContext
+from noishi import Context
 from shua.struct.binary import BinaryStruct
 from shua.struct.field import UInt8, BytesField
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from noishi.etype.ctx import ExtendContext_Noishi_Pdu as ExtendContext
-    class Context(ExtendContext, RawContext): ...
-else:
-    Context = RawContext
-    
 class SCA(BinaryStruct):
     length: UInt8
     type: UInt8
     number: BytesField = BytesField(length=lambda ctx: ctx['length'] - 1)
 
+def calculate_user_data_length(ctx: dict) -> int:
+    udl = ctx['udl']
+    dcs = ctx.get('dcs', 0)
+    if dcs & 0x0C == 0x00:
+        return (udl * 7 + 7) // 8
+    else:
+        return udl
+    
 class TPDU(BinaryStruct):
     first_octet: UInt8
     sender_length: UInt8
@@ -23,7 +24,7 @@ class TPDU(BinaryStruct):
     dcs: UInt8
     scts: BytesField = BytesField(length=7)
     udl: UInt8
-    user_data: BytesField = BytesField(length=lambda ctx: ctx['udl'] * 2 if ctx['dcs'] == 8 else ctx['udl'])
+    user_data: BytesField = BytesField(length=calculate_user_data_length)
 
 def swap_nibbles(s: str) -> str:
     return ''.join(s[i + 1] + s[i] for i in range(0, len(s), 2))
@@ -76,22 +77,12 @@ def decode_pdu(pdu_hex: str) -> tuple[str, str, str, str]:
         text = decode_7bit(tpdu.user_data, tpdu.udl)
     elif tpdu.dcs & 0x0C == 0x04:
         text = tpdu.user_data.decode('latin-1')
-        text_type = "latin-1"
+        text_type = "8BIT"
     else:
         text_type = "null"
         text = tpdu.user_data.hex()
 
     return sca_number, sender, text, text_type
 
-def apply(ctx: Context):
-    # TODO: 热重载支持
-    sub = ctx.register('pdu')
-    
-    def _decode_pdu(pdu: str) -> tuple[str, str, str, str]:
-        """解码 PDU 格式短信，返回 SCA、发送者、短信文本、短信编码类型"""
-        return decode_pdu(pdu)
-    
-    sub.register('decode',_decode_pdu)
-    return sub
-
-inject = ["logger"]
+def apply(ctx: Context):  
+    return ctx.register('pdu').register('decode',decode_pdu)
