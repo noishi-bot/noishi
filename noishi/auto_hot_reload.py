@@ -1,68 +1,71 @@
-import asyncio
 import os
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
-from noishi import Context
+import traceback
 import types
+import watchfiles
+from typing import Iterable, TypedDict
+from pathlib import Path
+from noishi import Context
 
-DEBOUNCE_DELAY = 1
+class ModuleInfo(TypedDict):
+    name: str
+    path: Path
 
-class AutoReloadHandler(FileSystemEventHandler):
-    def __init__(self, ctx: Context, modules: list[types.ModuleType], loop: asyncio.AbstractEventLoop):
-        self.ctx = ctx
-        self.modules = modules
-        self.loop = loop
-        self.paths_to_modules = {
-            os.path.abspath(getattr(mod, "__file__", "")): mod
-            for mod in modules
-            if hasattr(mod, "__file__")
-        }
-        self._debounce_tasks = {}
-
-    def on_modified(self, event):
-        if not event.is_directory and event.src_path.endswith(".py"):
-            path = os.path.abspath(event.src_path)
-            if path in self.paths_to_modules:
-                mod = self.paths_to_modules[path]
-                if mod.__name__ in self._debounce_tasks:
-                    self._debounce_tasks[mod.__name__].cancel()
-                
-                self._debounce_tasks[mod.__name__] = asyncio.run_coroutine_threadsafe(
-                    self._debounced_reload(mod), self.loop
-                )
-
-    async def _debounced_reload(self, mod: types.ModuleType):
-        try:
-            await asyncio.sleep(DEBOUNCE_DELAY)
-            print(f"[watchdog] Detected change in {mod.__name__}, reloading...")
-            await self.reload_module(mod.__name__)
-        except asyncio.CancelledError:
-            pass
-        finally:
-            self._debounce_tasks.pop(mod.__name__, None)
+def get_module_info(mod: types.ModuleType) -> ModuleInfo:
+    if hasattr(mod, "__path__") and mod.__path__:
+        mod_path = mod.__path__[0] # dir_path
+    elif hasattr(mod, "__file__") and mod.__file__:
+        mod_path = mod.__file__ # file_path
+    else:
+        raise TypeError(f"Module {mod.__name__} is not watchable, skipping.")
     
-    async def reload_module(self, module_name: str):
-        try:
-            self.ctx.reload_sub_module(module_name)
-            print(f"模块 {module_name} 重载成功")
-        except Exception as e:
-            print(f"模块重载失败:{e!r}")
-            import traceback
-            stack_str = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
-            print(stack_str)
+    return ModuleInfo(
+        name=mod.__name__,
+        path=Path(os.path.abspath(mod_path))
+    )
 
-async def auto_hot_reload(ctx: Context, modules: list[types.ModuleType], loop: asyncio.AbstractEventLoop):
-    event_handler = AutoReloadHandler(ctx, modules, loop)
-    observer = Observer()
-    for mod in modules:
-        mod_path = getattr(mod, "__file__", None)
-        if mod_path:
-            observer.schedule(event_handler, path=os.path.dirname(mod_path), recursive=False)
-    observer.start()
+async def auto_hot_reload(
+    ctx: Context, 
+    module_infos: Iterable[types.ModuleType | ModuleInfo],
+    debounce_delay_seconds: float = 1.0
+):
+    processed_module_infos = []
+    for mod in module_infos:
+        if isinstance(mod, types.ModuleType):
+            processed_module_infos.append(get_module_info(mod))
+        else:
+            processed_module_infos.append(mod)
+    module_infos = processed_module_infos
 
-    try:
-        while True:
-            await asyncio.sleep(1)
-    finally:
-        observer.stop()
-        observer.join()
+    if not module_infos:
+        print("Auto hot-reload enabled, but no valid modules to watch.")
+        return
+    
+    path_to_module = {mod_info["path"]: mod_info for mod_info in module_infos}
+    watch_paths = list(path_to_module.keys())
+    
+    debounce_ms = int(debounce_delay_seconds * 1000)
+    print(f"Starting hot-reload watcher on {len(watch_paths)} locations...")
+    
+    async for changes in watchfiles.awatch(
+        *watch_paths,
+        debounce=debounce_ms,
+        watch_filter=watchfiles.PythonFilter()
+    ):
+        for change_type, file_path in changes:
+            if change_type == watchfiles.Change.modified:
+                file_path = Path(file_path).resolve()
+                for watch_path in watch_paths:
+                    watch_path = Path(watch_path).resolve()
+                    if watch_path in file_path.parents or file_path == watch_path:
+                        name = path_to_module[watch_path]["name"]
+                        print(f"[watchfiles] Detected change in {name}, reloading...")
+                        try:
+                            ctx.reload_sub_module(name)
+                            print(f"模块 {name} 重载成功")
+                        except Exception as e:
+                            stack_str = ''.join(traceback.format_exception(
+                                type(e), e, e.__traceback__
+                            ))
+                            print(f"模块 {name} 重载失败:\n{stack_str}")
+                        break
+        

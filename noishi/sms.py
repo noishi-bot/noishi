@@ -1,5 +1,6 @@
 from noishi import Context as RawContext, Service
 from noishi.event import serial
+from noishi.event import sms
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -24,7 +25,7 @@ class AtSmsService(Service[Context]):
     async def handle_serial_rx(self, event: serial.SerialDataReceived):
         if not self._running:
             return
-            
+
         data_str = event.data.decode()
         self.buffer += data_str
 
@@ -43,12 +44,20 @@ class AtSmsService(Service[Context]):
                     if len(parts) == 2:
                         index = parts[1].strip()
                         self.last_delete_index = index
-                        await self.logger.info(f"检测到新短信索引: {index}")
+                        await self.logger.debug(f"检测到新短信索引: {index}")
                         await self.ctx.send_event(
-                            serial.SerialWriteRequest(event.port, self.ctx.at.command.build("+CMGR",index).encode())
+                            serial.SerialWriteRequest(event.port, self.ctx.at.command.build("+CMGR", index).encode())
                         )
                         self.pending_command = True
                         self.pending_lines.clear()
+                continue
+
+            if line.startswith('+CMT:'):
+                pdu_line, self.buffer = self.buffer.split('\n', 1)
+                pdu_line = pdu_line.strip()
+                if pdu_line:
+                    sca_number, sender, text, text_type = self.ctx.pdu.decode(pdu_line)
+                    await self.ctx.send_event(sms.SmsReceived(sca_number, sender, text, text_type))
                 continue
 
             if self.pending_command:
@@ -58,33 +67,23 @@ class AtSmsService(Service[Context]):
                     result_text = "\n".join(self.pending_lines)
                     await self.logger.debug(f"AT命令完整响应:\n{result_text}")
                     self.pending_command = False
-
-                    try:
-                        lines = result_text.splitlines()
-                        for i, line in enumerate(lines):
-                            if line.startswith("+CMGR:"):
-                                if i + 1 < len(lines):
-                                    pdu_line = lines[i + 1].strip()
-                                    if pdu_line:
-                                        try:
-                                            sca_number, sender, text, text_type = self.ctx.pdu.decode(pdu_line)
-                                            await self.logger.info(
-                                                f"\n短信中心: {sca_number}\n发送者: {sender}\n正文: {text}\n正文编码类型: {text_type}"
+                    lines = result_text.splitlines()
+                    for i, line in enumerate(lines):
+                        if line.startswith("+CMGR:"):
+                            if i + 1 < len(lines):
+                                pdu_line = lines[i + 1].strip()
+                                if pdu_line:
+                                    sca_number, sender, text, text_type = self.ctx.pdu.decode(pdu_line)
+                                    await self.ctx.send_event(sms.SmsReceived(sca_number, sender, text, text_type))
+                                    if self.last_delete_index is not None:
+                                        await self.ctx.send_event(
+                                            serial.SerialWriteRequest(
+                                                event.port, self.ctx.at.command.build("+CMGD", self.last_delete_index, 0).encode()
                                             )
-                                            if self.last_delete_index is not None:
-                                                await self.ctx.send_event(
-                                                    serial.SerialWriteRequest(
-                                                        event.port, self.ctx.at.command.build("+CMGD",self.last_delete_index,0).encode()
-                                                    )
-                                                )
-                                                await self.logger.info(f"已删除短信索引: {self.last_delete_index}")
-                                                self.last_delete_index = None
-                                        except Exception as e:
-                                            await self.logger.error(f"PDU解码失败: {e}")
-                                        break
-                    except Exception as e:
-                        await self.logger.error(f"AT 响应解析失败: {e}")
-
+                                        )
+                                        await self.logger.debug(f"已删除短信索引: {self.last_delete_index}")
+                                        self.last_delete_index = None
+                                    break
                     self.pending_lines.clear()
                 continue
     
